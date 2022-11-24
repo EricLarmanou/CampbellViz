@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-#library partly adapted from licor one, but not completely updated
+"""
+@author: Eric Larmanou, Aarhus university, Denmark
+various tools for manuiplating data from Campbell dataloggers
+"""
 
 import os
 from glob import glob
 from datetime import datetime
 import pandas as pd
 import numpy as np
-
-#my modules
-#from common3 import
 
 Delimiter = ','
 Settings = {}
