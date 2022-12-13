@@ -15,21 +15,24 @@ Settings = {}
 nan = float('nan')
 
 def GetInfo(File):
-    #read header only
-    
+    #retrieve the number of header lines and the header if any
     #read the 1st row
     DF_info = pd.read_csv(File, sep=Delimiter, decimal='.', skiprows=0, header=None, nrows=1)
     if DF_info.loc[0,0] == 'TOA5': #full header
         #read the header
         DF_header = pd.read_csv(File, sep=Delimiter, decimal='.', skiprows=[0], header=0, nrows=2)
-        return DF_info, DF_header, 4
+        NbHeader = 4
     elif sum(DF_info.apply(lambda s: pd.to_numeric(s, errors='coerce').notnull().all()))/len(DF_info.columns)<0.3: # less than 30% of numeric data then we assume a 1 row header
-        return None, DF_info, 1
+        DF_header = None
+        NbHeader = 1
     else: # no header
-        return None, None, 0
+        DF_header = None
+        NbHeader = 0
+    
+    return DF_header, NbHeader
 
 def LoadFile(File):
-    #read 1 file
+    #load 1 data file, detect the number of header rows, return data and header if any
     
     #read 5 rows (up to 4 header + 1 data row)
     DF_info = pd.read_csv(File, sep=Delimiter, decimal='.', skiprows=0, header=None, nrows=1, quoting=1)
@@ -47,13 +50,11 @@ def LoadFile(File):
             DF_header = pd.read_csv(File, sep=Delimiter, decimal='.', skiprows=None, header=0, nrows=1)
             Field = str(DF_header.iloc[0,0])
             DF_header = DF_header.head(0)
-            DF_info = None
             header = 0
             skiprows = 0
         else: # no header
             Field = str(DF_info.iloc[0,0])
             DF_header = None
-            DF_info = None
             header = None
             skiprows = None
     
@@ -66,13 +67,16 @@ def LoadFile(File):
     dateparse = lambda x: datetime.strptime(x, FindDateFormat(Field)) # function to convert string into date
     DF_data = pd.read_csv(File, sep=Delimiter, decimal='.', skiprows=skiprows, header=header, parse_dates=parse_dates, date_parser=dateparse, index_col=index_col, na_values = ['NAN', -9999], keep_default_na = False)
     
-    return DF_data, DF_info, DF_header
+    return DF_data, DF_header
 
 def FindDateFormat(Field):
+    #guess the date fromat of a string
     import re
     
     # we try to guess the date fromat
-    if re.search("\A20\d\d\d\d\d\d\d\d\d\d\d\d\Z", Field):
+    if re.search("\A20\d\d\d\d\d\d\d\d\d\d\Z", Field):
+        DateFromat = '%Y%m%d%H%M'
+    elif re.search("\A20\d\d\d\d\d\d\d\d\d\d\d\d\Z", Field):
         DateFromat = '%Y%m%d%H%M%S'
     elif re.search("\A20\d\d-\d\d-\d\d \d\d:\d\d:\d\d\Z", Field):
         DateFromat = '%Y-%m-%d %H:%M:%S'
@@ -84,18 +88,18 @@ def FindDateFormat(Field):
     return DateFromat
 
 def LoadFolder(Folder):
-    #read all files matching variable Folder ('C:\' or 'C:\*.dat'...)
-    #read the header of the first file
+    #read all files matching Folder (ex. 'C:\' or 'C:\*.dat'...)
     
     Files = sorted(glob(Folder))
     return LoadFiles(Files)
 
 def LoadFiles(Files):
-    # reading in every file in the given directory - first trial: X:\Zackenberg\GeoBasis_2019\MM1\CR1000\OriginalData
-    DF_data = pd.DataFrame()                   # empty dataframe for appended data
+    # read every file in the given directory
+    # initialize an empty dataframe
+    DF_data = pd.DataFrame()
     NoHeaderYet = True
     for File in Files:
-        DF_tmp, DF_info, DF_header = LoadFile(File)
+        DF_tmp, DF_header = LoadFile(File)
         
         #handle header differences between 2 files
         if not DF_data.empty: # if not first file
@@ -115,26 +119,25 @@ def LoadFiles(Files):
             NoHeaderYet = False
         
     if not Files:
-        DF_info = None
         DF_header = None
     
-    return DF_data, DF_info, DF_header
+    return DF_data, DF_header
 
 def GetBounds(Folder):
-    #return the first and last date of each data files matching variable Folder ('C:\' or 'C:\*.dat'...)
+    #return the first and last date of each data files in Folder (ex. 'C:\' or 'C:\*.dat'...)
     
     import io
     Files = sorted(glob(Folder))
     
     # create DF
-    DFBounds = pd.DataFrame({'DateStart':np.datetime64(),'DateEnd':np.datetime64(),'DateFile':np.datetime64(),'HeaderSize':int(),'NbColumns':int()}, index=[os.path.basename(File) for File in Files])
+    DFBounds = pd.DataFrame({'DateStart':np.datetime64(),'DateEnd':np.datetime64(),'DateFile':np.datetime64(),'HeaderSize':int(),'NbColumns':int()}, index=Files)
     #DFBounds = pd.DataFrame(index = Files, columns = ['DateStart','DateEnd','DateFile'], dtype = 'datetime64[ns]')
     DFBounds.index.name = 'File'
     dateparse = lambda x: datetime.strptime(x, '%Y-%m-%d %H:%M:%S')
     
     for iFile, File in enumerate(Files):
         #print(File)
-        _,_,HeaderSize = GetInfo(Files[iFile])
+        _,HeaderSize = GetInfo(Files[iFile])
         fid = open(File, 'rb')
         #fid = open(r'C:\MyDoc\data\backupZac\ICOS\DATA\GL-ZaF\AC_Backup\toto.dat', 'rb')
         
@@ -173,16 +176,20 @@ def GetBounds(Folder):
     return DFBounds
 
 def LoadHeader(FileHeader):       
-    #load the header (file with 3 rows, like campbel TOA5 format without the 1st row)
+    #load the header (we expect a file with 3 rows, similar to Campbell TOA5 header, except the 1st row is missing)
 
-    #test that the header file exists
-    if os.path.exists(FileHeader):
-        #load the header file
-        DF_header = pd.read_csv(FileHeader, sep=Delimiter, decimal='.', skiprows=None, header=0, nrows=2)
+    if FileHeader:
+        #test that the header file exists
+        if os.path.exists(FileHeader):
+            #load the header file
+            DF_header = pd.read_csv(FileHeader, sep=Delimiter, decimal='.', skiprows=None, header=0, nrows=2)
+        else:
+            print('Warning: header file "' + FileHeader + '" not found.')
+            DF_header = pd.DataFrame()
     else:
-        print('Warning: header file "' + FileHeader + '" not found, but not necessary a problem.')
+        #if no header file specified, we assume data files contain a header
         DF_header = pd.DataFrame()
-        
+    
     return DF_header
 
 class classTable():
@@ -211,8 +218,8 @@ class classTable():
         else:
             Filter = (DateStart < self.Inventory.DateEnd) & (self.Inventory.DateStart<DateEnd)
         
-        Files = (self.Folder + self.Inventory.index[Filter]).tolist()
-        self.DF_data, self.DF_info, self.DF_header = LoadFiles(Files)
+        Files = self.Inventory.index[Filter].tolist()
+        self.DF_data, self.DF_header = LoadFiles(Files)
         if self.DF_header is None and not self.DF_data.empty:
             self.DF_data.columns = self.Header.columns[1:] # skip the first column (timestamp)
     
@@ -235,7 +242,7 @@ class classTable():
             
             #compare inventory with exisiting file
             Files = sorted(glob(Folder))
-            DFFiles = pd.DataFrame(index = [os.path.basename(File) for File in Files], columns = ['DateFile'], dtype = 'datetime64[ns]')
+            DFFiles = pd.DataFrame(index = Files, columns = ['DateFile'], dtype = 'datetime64[ns]')
             DFFiles.loc[:,'DateFile'] = [datetime.fromtimestamp(os.path.getmtime(File)) for File in Files]
             Update = not DFBounds[['DateFile']].equals(DFFiles)
         else:
@@ -368,15 +375,15 @@ if __name__ == "__main__":
     #Load(FileName)
     #DateBounds = GetBounds_n(r'C:\MyDoc\data\backupZac\ICOS\DATA\GL-ZaF\AC_Backup\GL_Zaf_BM_20210709_L06_F01.dat')
     #LoadInventory(Folder, FileInventory)
-    FileLoggers = 'C:\\MyDoc\\prog\\jupyter\\zac\\loggers.csv'
+    FileLoggers = 'C:\\MyDoc\\prog\\jupyter\\\CampbellViz\\loggers.csv'
     ListId = ['MM1_Met', 'MM2_Met', 'LogMM1_Met']
-    ListId = ['MM2_ETC_AC_Backup1']
-    DateStart = datetime.strptime('2022-04-01 00:00:00', '%Y-%m-%d %H:%M:%S')
-    DateEnd =  datetime.strptime('2022-05-01 00:00:00', '%Y-%m-%d %H:%M:%S')
+    ListId = ['MM1_ETC_METEO']
+    DateStart = datetime.strptime('2022-07-01 00:00:00', '%Y-%m-%d %H:%M:%S')
+    DateEnd =  datetime.strptime('2023-05-01 00:00:00', '%Y-%m-%d %H:%M:%S')
     Zac = SiteSet(FileLoggers)
     Zac.LoadData(ListId, DateStart, DateEnd)
     
     #Data, Variables = Load(r'C:\MyDoc\data\backupZac\GeoBasis_Current\MM1\CR1000\OriginalData\*.dat')
-    PlotMM1(Zac.Tables['MM1_Met'].DF_data)
+    #PlotMM1(Zac.Tables['MM1_ETC_METEO'].DF_data)
     
     
